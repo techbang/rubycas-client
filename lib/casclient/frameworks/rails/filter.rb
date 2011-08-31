@@ -143,8 +143,8 @@ module CASClient
             @@config[:logger] ||= begin
               if defined?(Rails) && Rails.respond_to?(:logger)
                 Rails.logger
-              elsif defined?(RAILS_DEFAULT_LOGGER)
-                RAILS_DEFAULT_LOGGER
+              elsif defined?(Rails.logger)
+                Rails.logger
               end
             end
             @@client = CASClient::Client.new(config)
@@ -408,7 +408,7 @@ module CASClient
           # Returns the path and filename of the service session lookup file.
           def filename_of_service_session_lookup(st)
             st = st.ticket if st.kind_of? ServiceTicket
-            return "#{RAILS_ROOT}/tmp/sessions/cas_sess.#{st}"
+            return "#{Rails.root}/tmp/sessions/cas_sess.#{st}"
           end
         end
       end
