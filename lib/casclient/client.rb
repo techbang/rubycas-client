@@ -22,7 +22,6 @@ module CASClient
       @validate_url = conf[:validate_url]
       @proxy_url    = conf[:proxy_url]
       @service_url  = conf[:service_url]
-      @force_ssl_verification  = conf[:force_ssl_verification]
       @proxy_callback_url  = conf[:proxy_callback_url]
       @proxy_retrieval_url = conf[:proxy_retrieval_url]
       
@@ -106,7 +105,6 @@ module CASClient
       
       https = Net::HTTP.new(uri.host, uri.port)
       https.use_ssl = (uri.scheme == 'https')
-      https.verify_mode = (@force_ssl_verification ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE)
       
       begin
         raw_res = https.start do |conn|
@@ -133,13 +131,7 @@ module CASClient
       )
       
       res = submit_data_to_cas(login_url, data)
-      response = CASClient::LoginResponse.new(res)
-
-      if response.is_success?
-        log.info("Login was successful for ticket: #{response.ticket.inspect}.")
-      end
-
-      return response
+      CASClient::LoginResponse.new(res)
     end
   
     # Requests a login ticket from the CAS server for use in a login request;
@@ -151,7 +143,6 @@ module CASClient
       uri = URI.parse(login_url+'Ticket')
       https = Net::HTTP.new(uri.host, uri.port)
       https.use_ssl = (uri.scheme == 'https')
-      https.verify_mode = (@force_ssl_verification ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE)
       res = https.post(uri.path, ';')
       
       raise CASException, res.body unless res.kind_of? Net::HTTPSuccess
@@ -193,8 +184,6 @@ module CASClient
       uri = URI.parse(uri) unless uri.kind_of? URI
       https = Net::HTTP.new(uri.host, uri.port)
       https.use_ssl = (uri.scheme == 'https')
-      https.verify_mode = (@force_ssl_verification ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE)
-      
       res = https.start do |conn|
         conn.get("#{uri.path}?#{uri.query}")
       end
@@ -220,7 +209,6 @@ module CASClient
       uri = URI.parse(uri) unless uri.kind_of? URI
       https = Net::HTTP.new(uri.host, uri.port)
       https.use_ssl = (uri.scheme == 'https')
-      https.verify_mode = (@force_ssl_verification ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE)
       
       begin
         raw_res = https.start do |conn|
@@ -251,7 +239,6 @@ module CASClient
       req.set_form_data(data, ';')
       https = Net::HTTP.new(uri.host, uri.port)
       https.use_ssl = (uri.scheme == 'https')
-      https.verify_mode = (@force_ssl_verification ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE)
       https.start {|conn| conn.request(req) }
     end
     
@@ -263,7 +250,7 @@ module CASClient
       pairs = []
       hash.each do |k, vals|
         vals = [vals] unless vals.kind_of? Array
-        vals.each {|v| pairs << (v.nil? ? CGI.escape(k) : "#{CGI.escape(k)}=#{CGI.escape(v)}")}
+        vals.each {|v| pairs << "#{CGI.escape(k)}=#{CGI.escape(v)}"}
       end
       pairs.join("&")
     end

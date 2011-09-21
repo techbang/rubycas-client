@@ -8,20 +8,10 @@ module CASClient
         @@config = nil
         @@client = nil
         @@log = nil
-        @@fake_user = nil
-        @@fake_extra_attributes = nil
         
         class << self
           def filter(controller)
             raise "Cannot use the CASClient filter because it has not yet been configured." if config.nil?
-            
-            if @@fake_user
-              controller.session[client.username_session_key] = @@fake_user
-              controller.session[:casfilteruser] = @@fake_user
-              controller.session[client.extra_attributes_session_key] = @@fake_extra_attributes
-              return true
-            end
-            
             
             last_st = controller.session[:cas_last_valid_ticket]
             
@@ -49,10 +39,8 @@ module CASClient
               # Re-use the previous ticket if the user already has a local CAS session (i.e. if they were already
               # previously authenticated for this service). This is to prevent redirection to the CAS server on every
               # request.
-              #
               # This behaviour can be disabled (so that every request is routed through the CAS server) by setting
-              # the :authenticate_on_every_request config option to true. However, this is not desirable since
-              # it will almost certainly break POST request, AJAX calls, etc.
+              # the :authenticate_on_every_request config option to false.
               log.debug "Existing local CAS session detected for #{controller.session[client.username_session_key].inspect}. "+
                 "Previous ticket #{last_st.ticket.inspect} will be re-used."
               st = last_st
@@ -67,7 +55,7 @@ module CASClient
                 if is_new_session
                   log.info("Ticket #{st.ticket.inspect} for service #{st.service.inspect} belonging to user #{vr.user.inspect} is VALID.")
                   controller.session[client.username_session_key] = vr.user.dup
-                  controller.session[client.extra_attributes_session_key] = HashWithIndifferentAccess.new(vr.extra_attributes) if vr.extra_attributes
+                  controller.session[client.extra_attributes_session_key] = HashWithIndifferentAccess.new(vr.extra_attributes.dup)
                   
                   if vr.extra_attributes
                     log.debug("Extra user attributes provided along with ticket #{st.ticket.inspect}: #{vr.extra_attributes.inspect}.")
@@ -110,56 +98,34 @@ module CASClient
                 return true
               else
                 log.warn("Ticket #{st.ticket.inspect} failed validation -- #{vr.failure_code}: #{vr.failure_message}")
-                unauthorized!(controller, vr)
+                redirect_to_cas_for_authentication(controller)
                 return false
               end
-            else # no service ticket was present in the request
+            else
               if returning_from_gateway?(controller)
                 log.info "Returning from CAS gateway without authentication."
 
-                # unset, to allow for the next request to be authenticated if necessary
+                # reset, so that we can retry authentication if there is a subsequent request
                 controller.session[:cas_sent_to_gateway] = false
 
                 if use_gatewaying?
                   log.info "This CAS client is configured to use gatewaying, so we will permit the user to continue without authentication."
-                  controller.session[client.username_session_key] = nil
                   return true
                 else
                   log.warn "The CAS client is NOT configured to allow gatewaying, yet this request was gatewayed. Something is not right!"
                 end
               end
               
-              unauthorized!(controller)
+              redirect_to_cas_for_authentication(controller)
               return false
             end
-          rescue OpenSSL::SSL::SSLError
-            log.error("SSL Error: hostname was not match with the server certificate. You can try to disable the ssl verification with a :force_ssl_verification => false in your configurations file.")
-            unauthorized!(controller)
-            return false
           end
           
           def configure(config)
             @@config = config
-            @@config[:logger] ||= begin
-              if defined?(Rails) && Rails.respond_to?(:logger)
-                ::Rails.logger
-              elsif defined?(::Rails.logger)
-                ::Rails.logger
-              end
-            end
+            @@config[:logger] = Rails.logger unless @@config[:logger]
             @@client = CASClient::Client.new(config)
             @@log = client.log
-          end
-          
-          # used to allow faking for testing
-          # with cucumber and other tools.
-          # use like 
-          #  CASClient::Frameworks::Rails::Filter.fake("homer")
-          # you can also fake extra attributes by including a second parameter
-          #  CASClient::Frameworks::Rails::Filter.fake("homer", {:roles => ['dad', 'husband']})
-          def fake(username, extra_attributes = nil)
-            @@fake_user = username
-            @@fake_extra_attributes = extra_attributes
           end
           
           def use_gatewaying?
@@ -174,41 +140,6 @@ module CASClient
             url = client.add_service_to_login_url(service_url)
             log.debug("Generated login url: #{url}")
             return url
-          end
-
-          # allow controllers to reuse the existing config to auto-login to
-          # the service
-          # 
-          # Use this from within a controller. Pass the controller, the
-          # login-credentials and the path that you want the user
-          # resdirected to on success.
-          #
-          # When writing a login-action you must check the return-value of
-          # the response to see if it failed!
-          #
-          # If it worked - you need to redirect the user to the service -
-          # path, because that has the ticket that will *actually* log them
-          # into your system
-          #
-          # example:
-          # def autologin
-          #   resp = CASClient::Frameworks::Rails::Filter.login_to_service(self, credentials, dashboard_url)
-          #   if resp.is_faiulure?
-          #     flash[:error] = 'Login failed'
-          #     render :action => 'login'
-          #   else
-          #     return redirect_to(@resp.service_redirect_url)
-          #   end
-          # end
-          def login_to_service(controller, credentials, return_path)
-            resp = @@client.login_to_service(credentials, return_path)
-            if resp.is_failure?
-              log.info("Validation failed for service #{return_path.inspect} reason: '#{resp.failure_message}'")
-            else
-              log.info("Ticket #{resp.ticket.inspect} for service #{return_path.inspect} is VALID.")
-            end
-            
-            resp
           end
           
           # Clears the given controller's local Rails session, does some local 
@@ -228,18 +159,6 @@ module CASClient
             delete_service_session_lookup(st) if st
             controller.send(:reset_session)
             controller.send(:redirect_to, client.logout_url(referer))
-          end
-          
-          def unauthorized!(controller, vr = nil)
-            if controller.params[:format] == "xml"
-              if vr
-                controller.send(:render, :xml => "<errors><error>#{vr.failure_message}</error></errors>", :status => 401)
-              else
-                controller.send(:head, 401)
-              end
-            else
-              redirect_to_cas_for_authentication(controller)
-            end
           end
           
           def redirect_to_cas_for_authentication(controller)
@@ -284,10 +203,8 @@ module CASClient
             
             if controller.request.post? &&
                 controller.params['logoutRequest'] &&
-                #This next line checks the logoutRequest value for both its regular and URI.escape'd form. I couldn't get
-                #it to work without URI.escaping it from rubycas server's side, this way it will work either way.
-                [controller.params['logoutRequest'],URI.unescape(controller.params['logoutRequest'])].find{|xml| xml =~
-                    %r{^<samlp:LogoutRequest.*?<samlp:SessionIndex>(.*)</samlp:SessionIndex>}m}
+                controller.params['logoutRequest'] =~
+                  %r{^<samlp:LogoutRequest.*?<samlp:SessionIndex>(.*)</samlp:SessionIndex>}m
               # TODO: Maybe check that the request came from the registered CAS server? Although this might be
               #       pointless since it's easily spoofable...
               si = $~[1]
@@ -408,7 +325,7 @@ module CASClient
           # Returns the path and filename of the service session lookup file.
           def filename_of_service_session_lookup(st)
             st = st.ticket if st.kind_of? ServiceTicket
-            return "#{::Rails.root.to_s}/tmp/sessions/cas_sess.#{st}"
+            return "#{Rails.root}/tmp/sessions/cas_sess.#{st}"
           end
         end
       end

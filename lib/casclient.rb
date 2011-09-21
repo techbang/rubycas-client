@@ -1,6 +1,5 @@
 require 'uri'
 require 'cgi'
-require 'logger'
 require 'net/https'
 require 'rexml/document'
 

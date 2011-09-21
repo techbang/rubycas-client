@@ -53,8 +53,7 @@ module CASClient
       @protocol = 2.0
       
       if is_success?
-        cas_user = @xml.elements["cas:user"]
-        @user = cas_user.text.strip if cas_user
+        @user = @xml.elements["cas:user"].text.strip if @xml.elements["cas:user"]
         @pgt_iou =  @xml.elements["cas:proxyGrantingTicket"].text.strip if @xml.elements["cas:proxyGrantingTicket"]
         
         proxy_els = @xml.elements.to_a('//cas:authenticationSuccess/cas:proxies/cas:proxy')
@@ -67,9 +66,7 @@ module CASClient
         
         @extra_attributes = {}
         @xml.elements.to_a('//cas:authenticationSuccess/*').each do |el|
-          # generating the hash requires prefixes to be defined, so add all of the namespaces
-          el.namespaces.each {|k,v| el.add_namespace(k,v)}
-          @extra_attributes.merge!(Hash.from_xml(el.to_s)) unless (el == cas_user)
+          @extra_attributes.merge!(Hash.from_xml(el.to_s)) unless el.prefix == 'cas'
         end
         
         # unserialize extra attributes
@@ -91,11 +88,11 @@ module CASClient
     end
     
     def is_success?
-      (instance_variable_defined?(:@valid) &&  @valid) || (protocol > 1.0 && xml.name == "authenticationSuccess")
+      @valid == true || (protocol > 1.0 && xml.name == "authenticationSuccess")
     end
     
     def is_failure?
-      (instance_variable_defined?(:@valid) && !@valid) || (protocol > 1.0 && xml.name == "authenticationFailure" )
+      @valid == false || (protocol > 1.0 && xml.name == "authenticationFailure" )
     end
   end
   
@@ -163,7 +160,7 @@ module CASClient
         @ticket = $~[1]
       end
       
-      if not ((http_response.kind_of?(Net::HTTPSuccess) || http_response.kind_of?(Net::HTTPFound)) && @ticket.present?)
+      if !http_response.kind_of?(Net::HTTPSuccess) || ticket.blank?
         @failure = true
         # Try to extract the error message -- this only works with RubyCAS-Server.
         # For other servers we just return the entire response body (i.e. the whole error page).
